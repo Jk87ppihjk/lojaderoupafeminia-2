@@ -11,7 +11,14 @@ module.exports = (app, db) => {
 
         db.query(query, params, (err, result) => {
             if (err) return res.status(500).send(err);
-            res.json(result);
+            
+            // CORREÇÃO CRÍTICA: Converte a string JSON de image_urls em array antes de enviar ao front
+            const products = result.map(p => ({
+                ...p,
+                image_urls: p.image_urls ? JSON.parse(p.image_urls) : []
+            }));
+
+            res.json(products);
         });
     });
 };
