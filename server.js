@@ -67,18 +67,31 @@ const initDb = async () => {
         )
     `);
 
-    // --- CORREÇÃO AUTOMÁTICA DA COLUNA image_urls ---
+    // --- CORREÇÃO AUTOMÁTICA: COLUNA image_urls (Produtos) ---
     try {
-        // Tenta selecionar a coluna nova. Se falhar, ela não existe.
         await promiseDb.query("SELECT image_urls FROM products LIMIT 1");
     } catch (err) {
         if (err.code === 'ER_BAD_FIELD_ERROR') {
-            console.log("Coluna 'image_urls' faltando. Adicionando agora...");
+            console.log("Coluna 'image_urls' faltando. Adicionando...");
             await promiseDb.query("ALTER TABLE products ADD COLUMN image_urls TEXT");
-            console.log("Coluna 'image_urls' adicionada com sucesso.");
         }
     }
-    // ------------------------------------------------
+
+    // --- CORREÇÃO AUTOMÁTICA: COLUNA user_id (Pedidos) ---
+    try {
+        await promiseDb.query("SELECT user_id FROM orders LIMIT 1");
+    } catch (err) {
+        if (err.code === 'ER_BAD_FIELD_ERROR') {
+            console.log("Coluna 'user_id' faltando em orders. Adicionando...");
+            await promiseDb.query("ALTER TABLE orders ADD COLUMN user_id INT");
+            // Tenta adicionar a chave estrangeira (pode falhar se houver dados antigos, então usamos catch silencioso)
+            try {
+                await promiseDb.query("ALTER TABLE orders ADD CONSTRAINT fk_user_id FOREIGN KEY (user_id) REFERENCES users(id)");
+            } catch (fkErr) {
+                console.log("Aviso: Não foi possível adicionar FK em user_id (possivelmente dados incompatíveis), mas a coluna foi criada.");
+            }
+        }
+    }
 
     // Criar Admin Padrão
     const [rows] = await promiseDb.query("SELECT * FROM users WHERE email = 'adm@gmail.com'");
