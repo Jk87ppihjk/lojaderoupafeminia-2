@@ -7,15 +7,13 @@ module.exports = (app, db) => {
     app.post('/api/checkout', async (req, res) => {
         const { user_id, total, items, buyer_email } = req.body; 
         
-        // --- CORREÇÃO DE SEGURANÇA ---
-        // Transforma 'undefined', 'null' ou vazio em NULL real para o banco
+        // Tratamento de segurança para o user_id
         let safeUserId = user_id;
         if (!safeUserId || safeUserId === 'undefined' || safeUserId === 'null') {
             safeUserId = null;
         }
 
         // 1. Criar o Pedido no Banco de Dados
-        // Agora passamos 'safeUserId' que será um número ou null
         const sql = "INSERT INTO orders (user_id, total, status) VALUES (?, ?, 'Pendente')";
         
         db.query(sql, [safeUserId, total], async (err, result) => {
@@ -49,18 +47,19 @@ module.exports = (app, db) => {
                         },
                         external_reference: String(orderId),
                         back_urls: {
-                            success: `${process.env.FRONTEND_URL || 'https://loja-demo.com'}/sucesso.html`,
-                            failure: `${process.env.FRONTEND_URL || 'https://loja-demo.com'}/falha.html`,
-                            pending: `${process.env.FRONTEND_URL || 'https://loja-demo.com'}/pendente.html`
+                            success: `${process.env.FRONTEND_URL || 'https://aldeify.com.br'}/sucesso.html`,
+                            failure: `${process.env.FRONTEND_URL || 'https://aldeify.com.br'}/falha.html`,
+                            pending: `${process.env.FRONTEND_URL || 'https://aldeify.com.br'}/pendente.html`
                         },
                         auto_return: "approved",
                     }
                 });
 
+                // Retorna o ID da preferência para o Brick usar
                 res.json({ 
                     message: "Pedido criado", 
                     orderId: orderId,
-                    init_point: mpResponse.init_point 
+                    preferenceId: mpResponse.id // IMPORTANTE: O front precisa disso
                 });
 
             } catch (error) {
