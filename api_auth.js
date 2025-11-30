@@ -1,48 +1,151 @@
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
 
-Textos completos
-id
-name
-email
-password
-role
-created_at
+module.exports = (app, db) => {
+    
+    // -------------------------
+    // ROTA DE REGISTRO
+    // -------------------------
+    app.post('/api/register', async (req, res) => {
+        const { name, email, password } = req.body;
+        console.log(`[REGISTER] Tentativa de registro para: ${email}`);
 
-Editar Editar
-Copiar Copiar
-Remover Remover
-1
-Administrador
-adm@gmail.com
-$2b$10$uuA4IUhnH4FQO/QAXekE7OIwEyyDT3sgnU5Gd4TxUoy...
-admin
-2025-11-30 14:31:25
+        if (!name || !email || !password) {
+            console.log('[REGISTER] Falha: Campos obrigatórios ausentes.');
+            return res.status(400).json({ message: "Todos os campos são obrigatórios." });
+        }
 
-Editar Editar
-Copiar Copiar
-Remover Remover
-2
-marke´lace
-domecim717@cexch.com
-$2b$10$V/NqV.mt5oLiC0fu2haWneoioOJCFvDnG3s0bJgFhtO...
-user
-2025-11-30 15:33:09
+        try {
+            const hashedPassword = await bcrypt.hash(password, 10);
+            
+            const sql = "INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, 'user')";
+            db.query(sql, [name, email, hashedPassword], (err, result) => {
+                if (err) {
+                    if (err.code === 'ER_DUP_ENTRY') {
+                        console.log('[REGISTER] Falha: E-mail duplicado.');
+                        return res.status(409).json({ message: "Este e-mail já está em uso." });
+                    }
+                    console.error("[REGISTER] Erro DB:", err);
+                    return res.status(500).json({ message: "Erro ao registrar usuário." });
+                }
+                console.log(`[REGISTER] Sucesso! Novo ID: ${result.insertId}`);
+                res.status(201).json({ message: "Registro concluído com sucesso." });
+            });
+        } catch (error) {
+            console.error("[REGISTER] Erro interno:", error);
+            res.status(500).json({ message: "Erro interno no servidor." });
+        }
+    });
 
-Editar Editar
-Copiar Copiar
-Remover Remover
-3
-nabote5797@cexch.com
-nabote5797@cexch.com
-$2b$10$cl/6e57LQ8sLzJmtxocPKOC7iKom4MQ.RE2cIDn5FrB...
-user
-2025-11-30 15:58:45
+    // -------------------------
+    // ROTA DE LOGIN (COM LOGS EXTREMOS)
+    // -------------------------
+    app.post('/api/login', (req, res) => {
+        const { email, password } = req.body;
+        console.log(`\n>>> [LOGIN] Iniciando login para: ${email}`);
+        
+        db.query("SELECT * FROM users WHERE email = ?", [email], async (err, result) => {
+            if (err) {
+                console.error("[LOGIN] Erro SQL:", err);
+                return res.status(500).json({ message: "Erro interno do servidor." });
+            }
+            
+            // LOG DO BANCO DE DADOS
+            console.log(`[LOGIN] Resultado da busca no DB: ${result.length} usuário(s) encontrado(s).`);
+            
+            if (result.length === 0) {
+                console.log("[LOGIN] Falha: Usuário não encontrado.");
+                return res.status(401).json({ message: "E-mail ou senha inválidos." });
+            }
 
-Editar Editar
-Copiar Copiar
-Remover Remover
-6
-wafiyo5097@cexch.com
-wafiyo5097@cexch.com
-$2b$10$ezE2rf8q2bHgFbbd3luU3OkdTwH8IY6VbXrjacrfQdM...
-user
-2025-11-30 17:05:17
+            const user = result[0];
+            
+            // LOG DOS DADOS BRUTOS (Verificar se o 'id' existe aqui)
+            console.log("[LOGIN] Dados brutos do usuário (DB):", JSON.stringify(user));
+
+            const passwordMatch = await bcrypt.compare(password, user.password);
+
+            if (!passwordMatch) {
+                console.log("[LOGIN] Falha: Senha incorreta.");
+                return res.status(401).json({ message: "E-mail ou senha inválidos." });
+            }
+
+            const token = jwt.sign(
+                { id: user.id, role: user.role }, 
+                process.env.JWT_SECRET || 'SEGREDO_MUITO_SECRETO', 
+                { expiresIn: '1h' }
+            );
+
+            // LOG DA RESPOSTA FINAL (A prova real)
+            const responseData = {
+                token: token, // (encurtado para log)
+                id: user.id,
+                name: user.name,
+                role: user.role,
+                message: "Login bem-sucedido."
+            };
+            
+            console.log("[LOGIN] Enviando resposta JSON:", JSON.stringify({
+                ...responseData, 
+                token: "TOKEN_GERADO..."
+            }));
+
+            res.json(responseData);
+        });
+    });
+
+    // -------------------------
+    // ROTA DE PERFIL
+    // -------------------------
+    app.get('/api/usuario/:userId', (req, res) => {
+        const { userId } = req.params;
+        console.log(`\n[PERFIL] Buscando dados para ID: ${userId}`);
+        
+        if (!userId || userId === 'undefined') {
+            console.log("[PERFIL] Erro: ID inválido recebido.");
+            return res.status(400).json({ message: "ID de usuário inválido." });
+        }
+        
+        db.query("SELECT id, name, email, role FROM users WHERE id = ?", [userId], (err, result) => {
+            if (err) {
+                console.error("[PERFIL] Erro SQL:", err);
+                return res.status(500).json({ message: "Erro interno do servidor." });
+            }
+            
+            if (result.length === 0) {
+                console.log("[PERFIL] Usuário não encontrado no DB.");
+                return res.status(404).json({ message: "Usuário não encontrado." });
+            }
+
+            const userData = result[0];
+            console.log("[PERFIL] Dados encontrados:", userData.name);
+            
+            res.json({
+                id: userData.id,
+                name: userData.name,
+                email: userData.email,
+                role: userData.role
+            });
+        });
+    });
+
+    // -------------------------
+    // ROTA DE PEDIDOS
+    // -------------------------
+    app.get('/api/usuario/:id/pedidos', (req, res) => {
+        const { id } = req.params;
+        // console.log(`[PEDIDOS] Buscando pedidos para ID: ${id}`);
+        
+        if (!id || id === 'undefined') {
+             return res.status(400).json({ message: "ID inválido." });
+        }
+
+        db.query("SELECT id, total, status, created_at FROM orders WHERE user_id = ? ORDER BY created_at DESC", [id], (err, result) => {
+            if (err) {
+                console.error("Erro ao buscar pedidos:", err);
+                return res.status(500).json({ message: "Erro ao buscar pedidos." });
+            }
+            res.json(result);
+        });
+    });
+};
