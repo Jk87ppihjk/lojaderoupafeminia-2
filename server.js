@@ -18,6 +18,8 @@ const db = mysql.createPool({
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
+    // Adiciona a porta padrão do MySQL (3306) para maior robustez
+    port: process.env.DB_PORT || 3306, 
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
@@ -58,8 +60,8 @@ const initDb = async () => {
     await promiseDb.query(`
         CREATE TABLE IF NOT EXISTS orders (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT NULL, /* Permitir NULL para pedidos anônimos */
-            external_reference VARCHAR(255) UNIQUE, /* Para referência do Mercado Pago */
+            user_id INT NULL,
+            external_reference VARCHAR(255) UNIQUE,
             total DECIMAL(10, 2),
             status ENUM('Pendente', 'Processando', 'Enviado', 'Entregue', 'Cancelado', 'Reembolsado') DEFAULT 'Pendente',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -82,14 +84,12 @@ const initDb = async () => {
     `);
     
     // --- CORREÇÕES AUTOMÁTICAS ---
-    // (Incluído aqui para garantir que as colunas 'image_urls' e 'user_id' existam, caso existam tabelas antigas)
-    // Se você executou o SQL de limpeza total, essas correções não serão necessárias.
     
-    // CORREÇÃO: AUTO_INCREMENT na orders.id (Essencial para o erro de duplicidade)
+    // CORREÇÃO: AUTO_INCREMENT na orders.id (Essencial)
     try {
         await promiseDb.query("ALTER TABLE orders MODIFY id INT NOT NULL AUTO_INCREMENT");
     } catch (err) {
-         // console.log("Aviso: Falha ao aplicar AUTO_INCREMENT (provavelmente OK).");
+         // Não loga o erro se for apenas um aviso de que já está OK
     }
     
     // Criar Admin Padrão
@@ -118,8 +118,8 @@ require('./api_admin_produtos')(app, db);
 require('./api_admin_pedidos')(app, db);
 require('./api_admin_clientes')(app, db);
 require('./api_relatorios')(app, db);
-require('./api_auth')(app, db); // NOVA ROTA DE AUTENTICAÇÃO
-require('./api_webhooks')(app, db); // NOVA ROTA DE WEBHOOKS MP/BREVO
+require('./api_auth')(app, db);
+require('./api_webhooks')(app, db);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
