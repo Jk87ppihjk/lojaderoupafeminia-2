@@ -1,11 +1,13 @@
 const { MercadoPagoConfig, Payment } = require('mercadopago');
-const { ApiClient } = require('@sendinblue/client');
+const brevo = require('@sendinblue/client'); // Importa o módulo completo
+const ApiClient = brevo.ApiClient; // Acessa a classe ApiClient do módulo
+const TransactionalEmailsApi = brevo.TransactionalEmailsApi; // Acessa a classe de e-mail
 
 // Configuração de Clientes
 const mpClient = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN });
-const brevoClient = new ApiClient();
+const brevoClient = new ApiClient(); // Agora ApiClient está definido corretamente
 brevoClient.authentications.apiKey.apiKey = process.env.BREVO_API_KEY;
-const transactionalEmailsApi = new brevoClient.TransactionalEmailsApi();
+const transactionalEmailsApi = new TransactionalEmailsApi(); // Usa a classe TransactionalEmailsApi
 
 // Função para atualizar o estoque de forma segura
 const updateStock = async (db, orderId, increase = false) => {
