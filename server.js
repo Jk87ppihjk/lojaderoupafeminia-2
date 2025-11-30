@@ -67,7 +67,18 @@ const initDb = async () => {
         )
     `);
 
-    // --- CORREÇÃO AUTOMÁTICA: COLUNA image_urls (Produtos) ---
+    // --- CORREÇÕES AUTOMÁTICAS (MIGRAÇÕES) ---
+
+    // CORREÇÃO 1: AUTO_INCREMENT NA COLUNA 'id' DA TABELA 'orders' (RESOLVE O ERRO DE DUPLICIDADE)
+    try {
+        // Força a coluna ID a ser AUTO_INCREMENT (necessário se o comando CREATE TABLE falhou inicialmente)
+        await promiseDb.query("ALTER TABLE orders MODIFY id INT NOT NULL AUTO_INCREMENT");
+        console.log("Correção: AUTO_INCREMENT aplicado à coluna 'id' em orders.");
+    } catch (err) {
+        console.log("Aviso: Falha ao aplicar AUTO_INCREMENT (provavelmente já está OK).");
+    }
+    
+    // Correção 2: Coluna 'image_urls' (Produtos)
     try {
         await promiseDb.query("SELECT image_urls FROM products LIMIT 1");
     } catch (err) {
@@ -77,18 +88,17 @@ const initDb = async () => {
         }
     }
 
-    // --- CORREÇÃO AUTOMÁTICA: COLUNA user_id (Pedidos) ---
+    // Correção 3: Coluna 'user_id' (Pedidos)
     try {
         await promiseDb.query("SELECT user_id FROM orders LIMIT 1");
     } catch (err) {
         if (err.code === 'ER_BAD_FIELD_ERROR') {
             console.log("Coluna 'user_id' faltando em orders. Adicionando...");
             await promiseDb.query("ALTER TABLE orders ADD COLUMN user_id INT");
-            // Tenta adicionar a chave estrangeira (pode falhar se houver dados antigos, então usamos catch silencioso)
             try {
                 await promiseDb.query("ALTER TABLE orders ADD CONSTRAINT fk_user_id FOREIGN KEY (user_id) REFERENCES users(id)");
             } catch (fkErr) {
-                console.log("Aviso: Não foi possível adicionar FK em user_id (possivelmente dados incompatíveis), mas a coluna foi criada.");
+                console.log("Aviso: Não foi possível adicionar FK em user_id.");
             }
         }
     }
