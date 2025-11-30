@@ -3,12 +3,13 @@ const jwt = require('jsonwebtoken');
 
 module.exports = (app, db) => {
     
-    // ROTA DE LOGIN
-    app.post('/api/login', (req, res) => {
+    // ROTA DE LOGIN DO ADMINISTRADOR (Exclusiva para role 'admin')
+    app.post('/api/admin/login', (req, res) => {
         const { email, password } = req.body;
-        db.query("SELECT * FROM users WHERE email = ?", [email], async (err, result) => {
+        // Busca apenas usuários com role 'admin'
+        db.query("SELECT * FROM users WHERE email = ? AND role = 'admin'", [email], async (err, result) => {
             if (err) return res.status(500).send(err);
-            if (result.length === 0) return res.status(401).json({ message: "Usuário não encontrado" });
+            if (result.length === 0) return res.status(401).json({ message: "Administrador não encontrado ou credenciais incorretas" });
 
             const user = result[0];
             const validPassword = await bcrypt.compare(password, user.password);
