@@ -1,8 +1,28 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 
+// Middleware de autenticação simulado (apenas para referência)
+// Em um sistema de produção, você usaria um middleware para verificar o JWT em todas as rotas seguras.
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (token == null) return res.sendStatus(401);
+
+    // O segredo de JWT deve vir de suas variáveis de ambiente
+    jwt.verify(token, process.env.JWT_SECRET || 'SEGREDO_MUITO_SECRETO', (err, user) => {
+        if (err) return res.sendStatus(403);
+        req.user = user;
+        next();
+    });
+};
+
+
 module.exports = (app, db) => {
-    // Rota de Registro de Novo Cliente
+    
+    // -------------------------
+    // ROTA DE REGISTRO
+    // -------------------------
     app.post('/api/register', async (req, res) => {
         const { name, email, password } = req.body;
         if (!name || !email || !password) {
@@ -10,64 +30,108 @@ module.exports = (app, db) => {
         }
 
         try {
+            // Hashing da senha
             const hashedPassword = await bcrypt.hash(password, 10);
             
-            // Note: O papel padrão é 'user'
+            // Inserção no banco
             const sql = "INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, 'user')";
             db.query(sql, [name, email, hashedPassword], (err, result) => {
                 if (err) {
                     if (err.code === 'ER_DUP_ENTRY') {
                         return res.status(409).json({ message: "Este e-mail já está em uso." });
                     }
+                    console.error("Erro ao registrar usuário:", err);
                     return res.status(500).json({ message: "Erro ao registrar usuário." });
                 }
                 res.json({ message: "Registro concluído com sucesso." });
             });
         } catch (error) {
+            console.error("Erro interno:", error);
             res.status(500).json({ message: "Erro interno no servidor." });
         }
     });
 
-    // Rota para Obter Detalhes do Pedido com Itens
-    app.get('/api/usuario/pedidos/:orderId', (req, res) => {
-        const { orderId } = req.params;
-        const userId = req.user?.id; // Assumindo que o middleware JWT verifica o usuário
+    // -------------------------
+    // ROTA DE LOGIN
+    // -------------------------
+    app.post('/api/login', (req, res) => {
+        const { email, password } = req.body;
+        
+        db.query("SELECT * FROM users WHERE email = ?", [email], async (err, result) => {
+            if (err) {
+                console.error("Erro no SQL de login:", err);
+                return res.status(500).json({ message: "Erro interno do servidor." });
+            }
+            if (result.length === 0) {
+                return res.status(401).json({ message: "E-mail ou senha inválidos." });
+            }
 
-        // Rota simplificada que busca pedido e seus itens
-        const sql = `
-            SELECT 
-                o.id AS orderId, o.total, o.status, o.created_at,
-                i.product_name, i.quantity, i.unit_price, i.product_id
-            FROM orders o
-            JOIN order_items i ON o.id = i.order_id
-            WHERE o.id = ? 
-        `; // Em um sistema real, adicione: AND o.user_id = ?
+            const user = result[0];
+            const passwordMatch = await bcrypt.compare(password, user.password);
 
-        db.query(sql, [orderId], (err, result) => {
-            if (err) return res.status(500).send(err);
-            if (result.length === 0) return res.status(404).json({ message: "Pedido não encontrado." });
+            if (!passwordMatch) {
+                return res.status(401).json({ message: "E-mail ou senha inválidos." });
+            }
 
-            const order = {
-                id: result[0].orderId,
-                total: result[0].total,
-                status: result[0].status,
-                date: result[0].created_at,
-                items: result.map(row => ({
-                    name: row.product_name,
-                    quantity: row.quantity,
-                    price: row.unit_price
-                }))
-            };
-            res.json(order);
+            // Geração de Token JWT
+            const token = jwt.sign(
+                { id: user.id, role: user.role }, 
+                process.env.JWT_SECRET || 'SEGREDO_MUITO_SECRETO', 
+                { expiresIn: '1h' }
+            );
+
+            // Retorna dados para o front-end salvar no localStorage
+            res.json({
+                token: token,
+                id: user.id,
+                name: user.name,
+                role: user.role,
+                message: "Login bem-sucedido."
+            });
         });
     });
 
-    // Rota para Obter Histórico de Pedidos
+    // ----------------------------------------------------
+    // ROTA PARA OBTER DADOS DO PERFIL DO USUÁRIO (CORREÇÃO)
+    // ----------------------------------------------------
+    app.get('/api/usuario/:userId', (req, res) => {
+        const { userId } = req.params;
+        
+        // Esta rota é o que corrige o erro "Unexpected end of JSON input"
+        
+        db.query("SELECT id, name, email, role FROM users WHERE id = ?", [userId], (err, result) => {
+            if (err) {
+                console.error("Erro ao buscar usuário:", err);
+                // CORREÇÃO: Sempre retorna um JSON válido em caso de erro 500
+                return res.status(500).json({ message: "Erro interno do servidor." });
+            }
+            
+            if (result.length === 0) {
+                // CORREÇÃO: Sempre retorna um JSON válido em caso de erro 404
+                return res.status(404).json({ message: "Usuário não encontrado." });
+            }
+
+            const userData = result[0];
+            res.json({
+                id: userData.id,
+                name: userData.name,
+                email: userData.email,
+                role: userData.role
+            });
+        });
+    });
+
+    // ------------------------------------------
+    // ROTA PARA OBTER HISTÓRICO DE PEDIDOS
+    // ------------------------------------------
     app.get('/api/usuario/:id/pedidos', (req, res) => {
         const { id } = req.params;
-        // Busca pedidos do usuário
+        
         db.query("SELECT id, total, status, created_at FROM orders WHERE user_id = ? ORDER BY created_at DESC", [id], (err, result) => {
-            if (err) return res.status(500).send(err);
+            if (err) {
+                console.error("Erro ao buscar pedidos do usuário:", err);
+                return res.status(500).send(err);
+            }
             res.json(result);
         });
     });
