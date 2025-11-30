@@ -71,11 +71,14 @@ const initDb = async () => {
 
     // CORREÇÃO 1: AUTO_INCREMENT NA COLUNA 'id' DA TABELA 'orders' (RESOLVE O ERRO DE DUPLICIDADE)
     try {
-        // Força a coluna ID a ser AUTO_INCREMENT (necessário se o comando CREATE TABLE falhou inicialmente)
+        // Primeiro, garante que o campo ID não é nulo.
+        await promiseDb.query("ALTER TABLE orders MODIFY id INT NOT NULL");
+        // Em seguida, adiciona o AUTO_INCREMENT, usando uma consulta que garante que o próximo ID será o maior + 1.
         await promiseDb.query("ALTER TABLE orders MODIFY id INT NOT NULL AUTO_INCREMENT");
         console.log("Correção: AUTO_INCREMENT aplicado à coluna 'id' em orders.");
     } catch (err) {
-        console.log("Aviso: Falha ao aplicar AUTO_INCREMENT (provavelmente já está OK).");
+        // Este catch ignora o erro se o campo já estiver OK ou se houver problemas de chave estrangeira
+        console.log("Aviso: Falha ao aplicar AUTO_INCREMENT (provavelmente já está configurado ou ocorreu um conflito).");
     }
     
     // Correção 2: Coluna 'image_urls' (Produtos)
