@@ -22,7 +22,14 @@ const db = mysql.createPool({
     port: process.env.DB_PORT || 3306, 
     waitForConnections: true,
     connectionLimit: 10,
-    queueLimit: 0
+    queueLimit: 0,
+    
+    // CORREÇÃO CRÍTICA DE ROBUSTEZ:
+    // Aumenta o tempo que uma conexão pode ficar ociosa (60s)
+    idleTimeout: 60000, 
+    // Garante que o Node.js tente manter a conexão viva
+    enableKeepAlive: true, 
+    keepAliveInitialDelay: 0
 });
 
 // Inicialização e Migração do Banco de Dados
