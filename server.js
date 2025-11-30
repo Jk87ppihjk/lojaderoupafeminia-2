@@ -8,11 +8,11 @@ const bodyParser = require('body-parser');
 const app = express();
 
 // Configurações
-app.use(cors({ origin: '*' })); 
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// Conexão com o Banco de Dados (Hostinger)
+// Conexão com o Banco de Dados
 const db = mysql.createPool({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
@@ -23,11 +23,13 @@ const db = mysql.createPool({
     queueLimit: 0
 });
 
-// Inicialização das Tabelas e do Admin
+// Inicialização e Migração do Banco de Dados
 const initDb = async () => {
     const promiseDb = db.promise();
 
-    // Tabela Usuários (MANTIDA)
+    console.log("Verificando estrutura do banco de dados...");
+
+    // 1. Tabela Usuários
     await promiseDb.query(`
         CREATE TABLE IF NOT EXISTS users (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -39,7 +41,7 @@ const initDb = async () => {
         )
     `);
 
-    // Tabela Produtos (ATUALIZADA: image_url -> image_urls TEXT para JSON Array)
+    // 2. Tabela Produtos
     await promiseDb.query(`
         CREATE TABLE IF NOT EXISTS products (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -47,13 +49,13 @@ const initDb = async () => {
             description TEXT,
             price DECIMAL(10, 2),
             sku VARCHAR(50),
-            image_urls TEXT, /* Alterado para armazenar JSON de URLs */
+            image_urls TEXT,
             category VARCHAR(100),
             stock INT DEFAULT 0
         )
     `);
 
-    // Tabela Pedidos (MANTIDA)
+    // 3. Tabela Pedidos
     await promiseDb.query(`
         CREATE TABLE IF NOT EXISTS orders (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -65,27 +67,42 @@ const initDb = async () => {
         )
     `);
 
-    // Criar Admin Padrão (MANTIDO)
+    // --- CORREÇÃO AUTOMÁTICA DA COLUNA image_urls ---
+    try {
+        // Tenta selecionar a coluna nova. Se falhar, ela não existe.
+        await promiseDb.query("SELECT image_urls FROM products LIMIT 1");
+    } catch (err) {
+        if (err.code === 'ER_BAD_FIELD_ERROR') {
+            console.log("Coluna 'image_urls' faltando. Adicionando agora...");
+            await promiseDb.query("ALTER TABLE products ADD COLUMN image_urls TEXT");
+            console.log("Coluna 'image_urls' adicionada com sucesso.");
+        }
+    }
+    // ------------------------------------------------
+
+    // Criar Admin Padrão
     const [rows] = await promiseDb.query("SELECT * FROM users WHERE email = 'adm@gmail.com'");
     if (rows.length === 0) {
         const hashedPassword = await bcrypt.hash('1234', 10);
         await promiseDb.query("INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)", 
             ['Administrador', 'adm@gmail.com', hashedPassword, 'admin']);
-        console.log('Admin criado com sucesso: adm@gmail.com / 1234');
+        console.log('Admin padrão criado.');
     }
+    
+    console.log("Banco de dados pronto.");
 };
 
 initDb().catch(err => console.error("Erro ao iniciar DB:", err));
 
-// Importar as rotas
+// Importar rotas
 require('./api_index')(app, db);
 require('./api_detalhes_produto')(app, db);
 require('./api_lista_produtos')(app, db);
 require('./api_carrinho')(app, db);
 require('./api_checkout')(app, db);
 require('./api_perfil_usuario')(app, db);
-require('./api_dashboard_admin')(app, db); 
-require('./api_admin_produtos')(app, db); // Onde a nova lógica de upload estará
+require('./api_dashboard_admin')(app, db);
+require('./api_admin_produtos')(app, db);
 require('./api_admin_pedidos')(app, db);
 require('./api_admin_clientes')(app, db);
 require('./api_relatorios')(app, db);
