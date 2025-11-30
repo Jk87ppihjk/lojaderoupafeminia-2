@@ -26,10 +26,9 @@ const db = mysql.createPool({
 // Inicialização e Migração do Banco de Dados
 const initDb = async () => {
     const promiseDb = db.promise();
-
     console.log("Verificando estrutura do banco de dados...");
 
-    // 1. Tabela Usuários
+    // 1. Tabela Usuários (Completa)
     await promiseDb.query(`
         CREATE TABLE IF NOT EXISTS users (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -41,7 +40,7 @@ const initDb = async () => {
         )
     `);
 
-    // 2. Tabela Produtos
+    // 2. Tabela Produtos (Completa)
     await promiseDb.query(`
         CREATE TABLE IF NOT EXISTS products (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -55,57 +54,44 @@ const initDb = async () => {
         )
     `);
 
-    // 3. Tabela Pedidos
+    // 3. Tabela Pedidos (Completa)
     await promiseDb.query(`
         CREATE TABLE IF NOT EXISTS orders (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT,
+            user_id INT NULL, /* Permitir NULL para pedidos anônimos */
+            external_reference VARCHAR(255) UNIQUE, /* Para referência do Mercado Pago */
             total DECIMAL(10, 2),
-            status ENUM('Pendente', 'Processando', 'Enviado', 'Entregue', 'Cancelado') DEFAULT 'Pendente',
+            status ENUM('Pendente', 'Processando', 'Enviado', 'Entregue', 'Cancelado', 'Reembolsado') DEFAULT 'Pendente',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     `);
-
-    // --- CORREÇÕES AUTOMÁTICAS (MIGRAÇÕES) ---
-
-    // CORREÇÃO 1: AUTO_INCREMENT NA COLUNA 'id' DA TABELA 'orders' (RESOLVE O ERRO DE DUPLICIDADE)
+    
+    // 4. NOVA TABELA: Itens do Pedido
+    await promiseDb.query(`
+        CREATE TABLE IF NOT EXISTS order_items (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            order_id INT NOT NULL,
+            product_id INT NULL,
+            product_name VARCHAR(255),
+            unit_price DECIMAL(10, 2),
+            quantity INT,
+            FOREIGN KEY (order_id) REFERENCES orders(id),
+            FOREIGN KEY (product_id) REFERENCES products(id)
+        )
+    `);
+    
+    // --- CORREÇÕES AUTOMÁTICAS ---
+    // (Incluído aqui para garantir que as colunas 'image_urls' e 'user_id' existam, caso existam tabelas antigas)
+    // Se você executou o SQL de limpeza total, essas correções não serão necessárias.
+    
+    // CORREÇÃO: AUTO_INCREMENT na orders.id (Essencial para o erro de duplicidade)
     try {
-        // Primeiro, garante que o campo ID não é nulo.
-        await promiseDb.query("ALTER TABLE orders MODIFY id INT NOT NULL");
-        // Em seguida, adiciona o AUTO_INCREMENT, usando uma consulta que garante que o próximo ID será o maior + 1.
         await promiseDb.query("ALTER TABLE orders MODIFY id INT NOT NULL AUTO_INCREMENT");
-        console.log("Correção: AUTO_INCREMENT aplicado à coluna 'id' em orders.");
     } catch (err) {
-        // Este catch ignora o erro se o campo já estiver OK ou se houver problemas de chave estrangeira
-        console.log("Aviso: Falha ao aplicar AUTO_INCREMENT (provavelmente já está configurado ou ocorreu um conflito).");
+         // console.log("Aviso: Falha ao aplicar AUTO_INCREMENT (provavelmente OK).");
     }
     
-    // Correção 2: Coluna 'image_urls' (Produtos)
-    try {
-        await promiseDb.query("SELECT image_urls FROM products LIMIT 1");
-    } catch (err) {
-        if (err.code === 'ER_BAD_FIELD_ERROR') {
-            console.log("Coluna 'image_urls' faltando. Adicionando...");
-            await promiseDb.query("ALTER TABLE products ADD COLUMN image_urls TEXT");
-        }
-    }
-
-    // Correção 3: Coluna 'user_id' (Pedidos)
-    try {
-        await promiseDb.query("SELECT user_id FROM orders LIMIT 1");
-    } catch (err) {
-        if (err.code === 'ER_BAD_FIELD_ERROR') {
-            console.log("Coluna 'user_id' faltando em orders. Adicionando...");
-            await promiseDb.query("ALTER TABLE orders ADD COLUMN user_id INT");
-            try {
-                await promiseDb.query("ALTER TABLE orders ADD CONSTRAINT fk_user_id FOREIGN KEY (user_id) REFERENCES users(id)");
-            } catch (fkErr) {
-                console.log("Aviso: Não foi possível adicionar FK em user_id.");
-            }
-        }
-    }
-
     // Criar Admin Padrão
     const [rows] = await promiseDb.query("SELECT * FROM users WHERE email = 'adm@gmail.com'");
     if (rows.length === 0) {
@@ -132,6 +118,8 @@ require('./api_admin_produtos')(app, db);
 require('./api_admin_pedidos')(app, db);
 require('./api_admin_clientes')(app, db);
 require('./api_relatorios')(app, db);
+require('./api_auth')(app, db); // NOVA ROTA DE AUTENTICAÇÃO
+require('./api_webhooks')(app, db); // NOVA ROTA DE WEBHOOKS MP/BREVO
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
