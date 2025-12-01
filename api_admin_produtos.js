@@ -1,7 +1,7 @@
 const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
 const fs = require('fs');
-const jwt = require('jsonwebtoken'); // Adicionado o JWT
+const jwt = require('jsonwebtoken');
 
 // Configuração do Cloudinary
 cloudinary.config({
@@ -21,7 +21,6 @@ const safeJSONParse = (jsonString) => {
         const parsed = JSON.parse(jsonString);
         return Array.isArray(parsed) ? parsed : [];
     } catch (e) {
-        // console.error("Erro ao parsear JSON:", e); // Comentei para evitar logs excessivos em produção
         return [];
     }
 }
@@ -38,7 +37,6 @@ const safeJSONStringify = (data) => {
 // FUNÇÃO: Calcula o menor preço para o preço base na listagem
 const calculateBasePrice = (variations) => {
     if (!variations || variations.length === 0) return 0;
-    // Filtra apenas preços válidos e maiores que zero
     const prices = variations.map(v => parseFloat(v.price)).filter(p => !isNaN(p) && p > 0);
     return prices.length > 0 ? Math.min(...prices) : 0;
 }
@@ -104,7 +102,6 @@ module.exports = (app, db) => {
             base_price: base_price,
             stock: stock || 0,
             category: category || '',
-            // Campos legados (manter como array vazio ou remover do SQL)
             image_urls: safeJSONStringify([]),
             colors: safeJSONStringify([]),
             tags: safeJSONStringify(tags)
@@ -170,7 +167,6 @@ module.exports = (app, db) => {
 
     // ROTA 3: Listar Produtos (GET /api/admin/produtos) - AGORA USA base_price
     app.get('/api/admin/produtos', checkAdmin, (req, res) => {
-        // Seleciona base_price e tags
         db.query("SELECT id, name, base_price, sku, stock, category, tags FROM products ORDER BY id DESC", (err, result) => {
             if (err) {
                  console.error('SQL Error on GET /api/admin/produtos:', err);
@@ -305,10 +301,10 @@ module.exports = (app, db) => {
     });
 
     // ROTA 7: Obter Detalhes do Produto (GET /api/produto/:id) - ROTA PÚBLICA (Para loja)
-    // CORRIGIDA para retornar as variações de forma estruturada para o front-end da loja.
     app.get('/api/produto/:id', (req, res) => {
         const { id } = req.params;
 
+        // Note: A busca do base_price é mais simples aqui, pois ele já é o preço 'base' na listagem
         db.query("SELECT id, name, description, sku, category, tags, base_price FROM products WHERE id = ?", [id], (err, productResult) => {
             if (err) return res.status(500).json({ message: "Erro ao buscar produto principal.", error: err.message });
             if (productResult.length === 0) return res.status(404).json({ message: "Produto não encontrado." });
@@ -319,7 +315,7 @@ module.exports = (app, db) => {
             db.query("SELECT id, size, color, price, image_url, stock FROM product_variations WHERE product_id = ?", [id], (err, variationsResult) => {
                 if (err) return res.status(500).json({ message: "Erro ao buscar variações.", error: err.message });
                 
-                // Mapear Cores, Tamanhos e Imagens Únicas para o front-end (visão de detalhes)
+                // Mapear Cores e Tamanhos Únicos para os botões do front-end
                 const uniqueColors = [...new Set(variationsResult.map(v => v.color))];
                 const uniqueSizes = [...new Set(variationsResult.map(v => v.size))];
                 
