@@ -1,6 +1,19 @@
 module.exports = (app, db) => {
+
+    // FUNÇÃO: Lógica de parsing seguro (necessária para tags)
+    const safeJSONParse = (jsonString) => {
+        if (!jsonString) return [];
+        try {
+            const parsed = JSON.parse(jsonString);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (e) {
+            return [];
+        }
+    }
+    
     app.get('/api/produtos', (req, res) => {
         const category = req.query.categoria;
+        
         // Seleciona o base_price e a primeira imagem disponível na tabela de variações
         let query = "SELECT p.id, p.name, p.base_price, p.category, p.description, p.tags, " +
                     " (SELECT image_url FROM product_variations WHERE product_id = p.id AND image_url IS NOT NULL ORDER BY id LIMIT 1) as main_image_url " +
@@ -20,7 +33,7 @@ module.exports = (app, db) => {
             
             const products = result.map(p => ({
                 ...p,
-                tags: p.tags ? JSON.parse(p.tags) : [],
+                tags: safeJSONParse(p.tags),
                 // Mapeia a imagem principal para o campo esperado pelo front
                 image_urls: p.main_image_url ? [p.main_image_url] : []
             }));
