@@ -14,20 +14,36 @@ cloudinary.config({
 // Configuração do Multer
 const upload = multer({ dest: 'uploads/' });
 
-// FUNÇÃO CORRIGIDA: Lógica de parsing seguro para evitar o erro 'rescue'
+// FUNÇÃO: Lógica de parsing seguro para evitar erros de JSON
 const safeJSONParse = (jsonString) => {
     if (!jsonString) return [];
     try {
         const parsed = JSON.parse(jsonString);
-        // Garante que o resultado seja um array, se for um objeto ou string, retorna vazio para evitar quebras.
         return Array.isArray(parsed) ? parsed : [];
     } catch (e) {
-        console.error("Erro ao parsear JSON:", e);
+        // console.error("Erro ao parsear JSON:", e); // Comentei para evitar logs excessivos em produção
         return [];
     }
 }
 
-// Middleware para verificar se o usuário é Admin (Adicionado para segurança)
+// FUNÇÃO: Serialização segura para o banco de dados
+const safeJSONStringify = (data) => {
+    try {
+        return JSON.stringify(data || []);
+    } catch (e) {
+        return '[]';
+    }
+}
+
+// FUNÇÃO: Calcula o menor preço para o preço base na listagem
+const calculateBasePrice = (variations) => {
+    if (!variations || variations.length === 0) return 0;
+    // Filtra apenas preços válidos e maiores que zero
+    const prices = variations.map(v => parseFloat(v.price)).filter(p => !isNaN(p) && p > 0);
+    return prices.length > 0 ? Math.min(...prices) : 0;
+}
+
+// Middleware para verificar se o usuário é Admin
 const checkAdmin = (req, res, next) => {
     try {
         const token = req.headers.authorization.split(' ')[1];
@@ -74,72 +90,125 @@ module.exports = (app, db) => {
         }
     });
 
-    // ROTA 2: Criar Produto (POST /api/admin/produtos) - CORRIGIDA e PROTEGIDA
+    // ROTA 2: Criar Produto (POST /api/admin/produtos) - COM VARIAÇÕES E TRANSAÇÃO
     app.post('/api/admin/produtos', checkAdmin, (req, res) => {
-        // Inclui 'colors' e 'tags'
-        const { name, price, sku, stock, category, image_urls, description, colors, tags } = req.body; 
+        const { name, description, sku, stock, category, tags, variations } = req.body;
         
-        const safeName = name || '';
-        const safePrice = price || 0;
-        const safeStock = stock || 0;
-        const safeSku = sku || '';
-        const safeCategory = category || '';
-        const safeDescription = description || '';
+        const base_price = calculateBasePrice(variations);
         
-        // Serializa arrays para string JSON
-        const imageUrlsJson = JSON.stringify(image_urls || []); 
-        const colorsJson = JSON.stringify(colors || []);       
-        const tagsJson = JSON.stringify(tags || []);           
+        // Dados do produto principal
+        const productData = {
+            name: name || '',
+            description: description || '',
+            sku: sku || '',
+            base_price: base_price,
+            stock: stock || 0,
+            category: category || '',
+            // Campos legados (manter como array vazio ou remover do SQL)
+            image_urls: safeJSONStringify([]),
+            colors: safeJSONStringify([]),
+            tags: safeJSONStringify(tags)
+        };
+        
+        if (!variations || variations.length === 0) {
+            return res.status(400).json({ message: "É necessário fornecer pelo menos uma variação (tamanho/cor/preço)." });
+        }
 
-        // SQL CORRIGIDA para incluir colors e tags
-        const sql = "INSERT INTO products (name, price, sku, stock, category, image_urls, description, colors, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"; 
-        db.query(sql, [safeName, safePrice, safeSku, safeStock, safeCategory, imageUrlsJson, safeDescription, colorsJson, tagsJson], (err, result) => {
-            if (err) {
-                console.error('SQL Error during product creation:', err);
-                return res.status(500).json({ message: "Erro ao criar produto no banco de dados.", error: err.message });
-            }
-            res.json({ message: "Produto criado com sucesso", id: result.insertId });
+        db.getConnection((err, connection) => {
+            if (err) return res.status(500).json({ message: "Erro ao obter conexão com o banco de dados." });
+
+            connection.beginTransaction(err => {
+                if (err) { connection.release(); return res.status(500).json({ message: "Erro ao iniciar transação." }); }
+
+                // 1. INSERIR NA TABELA PRINCIPAL (products)
+                const sqlProduct = 'INSERT INTO products SET ?';
+                connection.query(sqlProduct, productData, (err, result) => {
+                    if (err) {
+                        return connection.rollback(() => {
+                            connection.release();
+                            res.status(500).json({ message: "Erro ao inserir produto principal.", error: err.message });
+                        });
+                    }
+
+                    const productId = result.insertId;
+
+                    // 2. INSERIR VARIAÇÕES NA TABELA product_variations
+                    const variationsValues = variations.map(v => [
+                        productId,
+                        v.size,
+                        v.color,
+                        parseFloat(v.price),
+                        v.image_url || null,
+                        parseInt(v.stock) || 0
+                    ]);
+
+                    const sqlVariations = 'INSERT INTO product_variations (product_id, size, color, price, image_url, stock) VALUES ?';
+                    connection.query(sqlVariations, [variationsValues], (err) => {
+                        if (err) {
+                            return connection.rollback(() => {
+                                connection.release();
+                                res.status(500).json({ message: "Erro ao inserir variações do produto.", error: err.message });
+                            });
+                        }
+
+                        // 3. COMITAR A TRANSAÇÃO
+                        connection.commit(err => {
+                            if (err) {
+                                return connection.rollback(() => {
+                                    connection.release();
+                                    res.status(500).json({ message: "Erro ao finalizar transação.", error: err.message });
+                                });
+                            }
+                            connection.release();
+                            res.status(201).json({ message: "Produto e variações criados com sucesso!", id: productId });
+                        });
+                    });
+                });
+            });
         });
     });
 
-    // ROTA 3: Listar Produtos (GET /api/admin/produtos) - CORRIGIDA e PROTEGIDA
+    // ROTA 3: Listar Produtos (GET /api/admin/produtos) - AGORA USA base_price
     app.get('/api/admin/produtos', checkAdmin, (req, res) => {
-        // Seleciona todos os campos
-        db.query("SELECT id, name, price, sku, stock, category, image_urls, colors, tags FROM products ORDER BY id DESC", (err, result) => {
+        // Seleciona base_price e tags
+        db.query("SELECT id, name, base_price, sku, stock, category, tags FROM products ORDER BY id DESC", (err, result) => {
             if (err) {
                  console.error('SQL Error on GET /api/admin/produtos:', err);
-                 return res.status(500).json({ message: "Erro ao listar produtos. Verifique se as colunas 'colors' e 'tags' foram adicionadas ao banco de dados." }); 
+                 return res.status(500).json({ message: "Erro ao listar produtos. Verifique se a coluna 'base_price' e 'tags' foram adicionadas ao banco de dados." }); 
             }
             
-            // DESERIALIZAÇÃO CORRIGIDA usando safeJSONParse (resolve o erro 'rescue')
+            // Apenas deserializa tags
             const products = result.map(p => ({
                 ...p,
-                image_urls: safeJSONParse(p.image_urls),
-                colors: safeJSONParse(p.colors), 
-                tags: safeJSONParse(p.tags)       
+                tags: safeJSONParse(p.tags)
             }));
             res.json(products);
         });
     });
     
-    // ROTA 4: Obter Detalhes do Produto (GET /api/produto/:id) - CORRIGIDA (Visualização Pública)
-    app.get('/api/produto/:id', (req, res) => {
+    // ROTA 4: Obter Detalhes do Produto (GET /api/admin/produtos/:id) - PARA EDIÇÃO
+    app.get('/api/admin/produtos/:id', checkAdmin, (req, res) => {
         const { id } = req.params;
-        // Inclui 'colors' e 'tags'
-        db.query("SELECT id, name, description, price, sku, stock, category, image_urls, colors, tags FROM products WHERE id = ?", [id], (err, result) => {
-            if (err) return res.status(500).send(err);
-            if (result.length === 0) return res.status(404).json({ message: "Produto não encontrado" });
+
+        db.query("SELECT id, name, description, sku, stock, category, tags, base_price FROM products WHERE id = ?", [id], (err, productResult) => {
+            if (err) return res.status(500).json({ message: "Erro ao buscar produto principal.", error: err.message });
+            if (productResult.length === 0) return res.status(404).json({ message: "Produto não encontrado." });
+
+            const product = productResult[0];
             
-            const product = result[0];
-            
-            // DESERIALIZAÇÃO CORRIGIDA usando safeJSONParse
-            product.image_urls = safeJSONParse(product.image_urls);
-            product.colors = safeJSONParse(product.colors);
-            product.tags = safeJSONParse(product.tags);
-            
-            res.json(product);
+            // Buscar variações
+            db.query("SELECT id, size, color, price, image_url, stock FROM product_variations WHERE product_id = ?", [id], (err, variationsResult) => {
+                if (err) return res.status(500).json({ message: "Erro ao buscar variações.", error: err.message });
+
+                // Retornar o produto com as variações
+                product.tags = safeJSONParse(product.tags);
+                product.variations = variationsResult; // Adiciona a lista de variações
+                
+                res.json(product);
+            });
         });
     });
+
 
     // ROTA 5: Deletar Produto (DELETE /api/admin/produtos/:id) - PROTEGIDA
     app.delete('/api/admin/produtos/:id', checkAdmin, (req, res) => {
@@ -149,34 +218,123 @@ module.exports = (app, db) => {
         });
     });
 
-    // ROTA 6: Atualizar Produto (PUT /api/admin/produtos/:id) - Adicionada e PROTEGIDA
+    // ROTA 6: Atualizar Produto (PUT /api/admin/produtos/:id) - COM VARIAÇÕES E TRANSAÇÃO
     app.put('/api/admin/produtos/:id', checkAdmin, (req, res) => {
         const { id } = req.params;
-        const { name, price, sku, stock, category, image_urls, description, colors, tags } = req.body;
+        const { name, description, sku, stock, category, tags, variations } = req.body;
         
-        const safeName = name || '';
-        const safePrice = price || 0;
-        const safeStock = stock || 0;
-        const safeSku = sku || '';
-        const safeCategory = category || '';
-        const safeDescription = description || '';
-        
-        // Serializa arrays
-        const imageUrlsJson = JSON.stringify(image_urls || []); 
-        const colorsJson = JSON.stringify(colors || []);       
-        const tagsJson = JSON.stringify(tags || []);           
+        const base_price = calculateBasePrice(variations);
 
-        // SQL CORRIGIDA para incluir colors e tags
-        const sql = "UPDATE products SET name = ?, price = ?, sku = ?, stock = ?, category = ?, image_urls = ?, description = ?, colors = ?, tags = ? WHERE id = ?";
-        db.query(sql, [safeName, safePrice, safeSku, safeStock, safeCategory, imageUrlsJson, safeDescription, colorsJson, tagsJson, id], (err, result) => {
-            if (err) {
-                console.error('SQL Error during product update:', err);
-                return res.status(500).json({ message: "Erro ao atualizar produto no banco de dados.", error: err.message });
-            }
-            if (result.affectedRows === 0) {
-                return res.status(404).json({ message: "Produto não encontrado para atualização" });
-            }
-            res.json({ message: "Produto atualizado com sucesso" });
+        const productData = {
+            name: name || '',
+            description: description || '',
+            sku: sku || '',
+            base_price: base_price,
+            stock: stock || 0,
+            category: category || '',
+            image_urls: safeJSONStringify([]),
+            colors: safeJSONStringify([]),
+            tags: safeJSONStringify(tags)
+        };
+        
+        if (!variations || variations.length === 0) {
+            return res.status(400).json({ message: "É necessário fornecer pelo menos uma variação (tamanho/cor/preço)." });
+        }
+
+        db.getConnection((err, connection) => {
+            if (err) return res.status(500).json({ message: "Erro ao obter conexão com o banco de dados." });
+
+            connection.beginTransaction(err => {
+                if (err) { connection.release(); return res.status(500).json({ message: "Erro ao iniciar transação." }); }
+
+                // 1. ATUALIZAR NA TABELA PRINCIPAL (products)
+                const sqlProduct = 'UPDATE products SET ? WHERE id = ?';
+                connection.query(sqlProduct, [productData, id], (err, result) => {
+                    if (err) {
+                        return connection.rollback(() => {
+                            connection.release();
+                            res.status(500).json({ message: "Erro ao atualizar produto principal.", error: err.message });
+                        });
+                    }
+
+                    // 2. DELETAR VARIAÇÕES ANTIGAS
+                    const sqlDeleteVariations = 'DELETE FROM product_variations WHERE product_id = ?';
+                    connection.query(sqlDeleteVariations, [id], (err) => {
+                        if (err) {
+                            return connection.rollback(() => {
+                                connection.release();
+                                res.status(500).json({ message: "Erro ao deletar variações antigas.", error: err.message });
+                            });
+                        }
+
+                        // 3. INSERIR NOVAS VARIAÇÕES
+                        const variationsValues = variations.map(v => [
+                            id, 
+                            v.size,
+                            v.color,
+                            parseFloat(v.price),
+                            v.image_url || null,
+                            parseInt(v.stock) || 0
+                        ]);
+                        
+                        const sqlInsertVariations = 'INSERT INTO product_variations (product_id, size, color, price, image_url, stock) VALUES ?';
+                        connection.query(sqlInsertVariations, [variationsValues], (err) => {
+                            if (err) {
+                                return connection.rollback(() => {
+                                    connection.release();
+                                    res.status(500).json({ message: "Erro ao inserir novas variações do produto.", error: err.message });
+                                });
+                            }
+
+                            // 4. COMITAR A TRANSAÇÃO
+                            connection.commit(err => {
+                                if (err) {
+                                    return connection.rollback(() => {
+                                        connection.release();
+                                        res.status(500).json({ message: "Erro ao finalizar transação.", error: err.message });
+                                    });
+                                }
+                                connection.release();
+                                res.json({ message: "Produto e variações atualizados com sucesso!" });
+                            });
+                        });
+                    });
+                });
+            });
+        });
+    });
+
+    // ROTA 7: Obter Detalhes do Produto (GET /api/produto/:id) - ROTA PÚBLICA (Para loja)
+    // CORRIGIDA para retornar as variações de forma estruturada para o front-end da loja.
+    app.get('/api/produto/:id', (req, res) => {
+        const { id } = req.params;
+
+        db.query("SELECT id, name, description, sku, category, tags, base_price FROM products WHERE id = ?", [id], (err, productResult) => {
+            if (err) return res.status(500).json({ message: "Erro ao buscar produto principal.", error: err.message });
+            if (productResult.length === 0) return res.status(404).json({ message: "Produto não encontrado." });
+
+            const product = productResult[0];
+            
+            // Buscar variações
+            db.query("SELECT id, size, color, price, image_url, stock FROM product_variations WHERE product_id = ?", [id], (err, variationsResult) => {
+                if (err) return res.status(500).json({ message: "Erro ao buscar variações.", error: err.message });
+                
+                // Mapear Cores, Tamanhos e Imagens Únicas para o front-end (visão de detalhes)
+                const uniqueColors = [...new Set(variationsResult.map(v => v.color))];
+                const uniqueSizes = [...new Set(variationsResult.map(v => v.size))];
+                
+                // Pegar todas as imagens únicas das variações para uma galeria
+                const allImages = variationsResult.map(v => v.image_url).filter(url => url);
+                const uniqueImages = [...new Set(allImages)];
+
+                product.tags = safeJSONParse(product.tags);
+                product.colors = uniqueColors;
+                product.sizes = uniqueSizes;
+                product.image_urls = uniqueImages; // Lista de imagens para a galeria
+                product.variations = variationsResult; // Variações completas
+                
+                res.json(product);
+            });
         });
     });
 };
