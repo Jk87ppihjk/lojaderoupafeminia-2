@@ -37,6 +37,7 @@ const safeJSONStringify = (data) => {
 // FUNÇÃO: Calcula o menor preço para o preço base na listagem
 const calculateBasePrice = (variations) => {
     if (!variations || variations.length === 0) return 0;
+    // Filtra apenas preços válidos e maiores que zero
     const prices = variations.map(v => parseFloat(v.price)).filter(p => !isNaN(p) && p > 0);
     return prices.length > 0 ? Math.min(...prices) : 0;
 }
@@ -102,6 +103,7 @@ module.exports = (app, db) => {
             base_price: base_price,
             stock: stock || 0,
             category: category || '',
+            // Manter estes campos vazios ou remover do SQL se não for mais usá-los no produto principal
             image_urls: safeJSONStringify([]),
             colors: safeJSONStringify([]),
             tags: safeJSONStringify(tags)
@@ -165,7 +167,7 @@ module.exports = (app, db) => {
         });
     });
 
-    // ROTA 3: Listar Produtos (GET /api/admin/produtos) - AGORA USA base_price
+    // ROTA 3: Listar Produtos (GET /api/admin/produtos) - ADMIN
     app.get('/api/admin/produtos', checkAdmin, (req, res) => {
         db.query("SELECT id, name, base_price, sku, stock, category, tags FROM products ORDER BY id DESC", (err, result) => {
             if (err) {
@@ -173,7 +175,6 @@ module.exports = (app, db) => {
                  return res.status(500).json({ message: "Erro ao listar produtos. Verifique se a coluna 'base_price' e 'tags' foram adicionadas ao banco de dados." }); 
             }
             
-            // Apenas deserializa tags
             const products = result.map(p => ({
                 ...p,
                 tags: safeJSONParse(p.tags)
@@ -208,6 +209,8 @@ module.exports = (app, db) => {
 
     // ROTA 5: Deletar Produto (DELETE /api/admin/produtos/:id) - PROTEGIDA
     app.delete('/api/admin/produtos/:id', checkAdmin, (req, res) => {
+        // A chave estrangeira FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+        // garante que as variações serão deletadas automaticamente.
         db.query("DELETE FROM products WHERE id = ?", [req.params.id], (err) => {
             if (err) return res.status(500).send(err);
             res.json({ message: "Produto deletado com sucesso" });
@@ -304,7 +307,6 @@ module.exports = (app, db) => {
     app.get('/api/produto/:id', (req, res) => {
         const { id } = req.params;
 
-        // Note: A busca do base_price é mais simples aqui, pois ele já é o preço 'base' na listagem
         db.query("SELECT id, name, description, sku, category, tags, base_price FROM products WHERE id = ?", [id], (err, productResult) => {
             if (err) return res.status(500).json({ message: "Erro ao buscar produto principal.", error: err.message });
             if (productResult.length === 0) return res.status(404).json({ message: "Produto não encontrado." });
