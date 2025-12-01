@@ -1,9 +1,9 @@
 const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
 const fs = require('fs');
-const jwt = require('jsonwebtoken');
+const jwt = require('jsonwebtoken'); // Adicionado o JWT
 
-// IMPORTANTE: Certifique-se de que estas variáveis de ambiente estão definidas no Render!
+// Configuração do Cloudinary
 cloudinary.config({
     cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
     api_key: process.env.CLOUDINARY_API_KEY,
@@ -14,7 +14,20 @@ cloudinary.config({
 // Configuração do Multer
 const upload = multer({ dest: 'uploads/' });
 
-// Middleware para verificar se o usuário é Admin
+// FUNÇÃO CORRIGIDA: Lógica de parsing seguro para evitar o erro 'rescue'
+const safeJSONParse = (jsonString) => {
+    if (!jsonString) return [];
+    try {
+        const parsed = JSON.parse(jsonString);
+        // Garante que o resultado seja um array, se for um objeto ou string, retorna vazio para evitar quebras.
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+        console.error("Erro ao parsear JSON:", e);
+        return [];
+    }
+}
+
+// Middleware para verificar se o usuário é Admin (Adicionado para segurança)
 const checkAdmin = (req, res, next) => {
     try {
         const token = req.headers.authorization.split(' ')[1];
@@ -29,9 +42,10 @@ const checkAdmin = (req, res, next) => {
     }
 };
 
+
 module.exports = (app, db) => {
     
-    // ROTA 1: Upload de Imagens
+    // ROTA 1: Upload de Imagens (PROTEGIDA)
     app.post('/api/admin/produtos/upload', checkAdmin, upload.array('images', 10), async (req, res) => {
         if (!req.files || req.files.length === 0) {
             return res.status(400).json({ message: "Nenhum arquivo de imagem foi enviado." });
@@ -60,9 +74,10 @@ module.exports = (app, db) => {
         }
     });
 
-    // ROTA 2: Criar Produto (POST /api/admin/produtos)
+    // ROTA 2: Criar Produto (POST /api/admin/produtos) - CORRIGIDA e PROTEGIDA
     app.post('/api/admin/produtos', checkAdmin, (req, res) => {
-        const { name, price, sku, stock, category, image_urls, description, colors, tags } = req.body;
+        // Inclui 'colors' e 'tags'
+        const { name, price, sku, stock, category, image_urls, description, colors, tags } = req.body; 
         
         const safeName = name || '';
         const safePrice = price || 0;
@@ -71,12 +86,13 @@ module.exports = (app, db) => {
         const safeCategory = category || '';
         const safeDescription = description || '';
         
-        // Serializa arrays para string JSON para salvar no banco
+        // Serializa arrays para string JSON
         const imageUrlsJson = JSON.stringify(image_urls || []); 
         const colorsJson = JSON.stringify(colors || []);       
-        const tagsJson = JSON.stringify(tags || []);          
+        const tagsJson = JSON.stringify(tags || []);           
 
-        const sql = "INSERT INTO products (name, price, sku, stock, category, image_urls, description, colors, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        // SQL CORRIGIDA para incluir colors e tags
+        const sql = "INSERT INTO products (name, price, sku, stock, category, image_urls, description, colors, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"; 
         db.query(sql, [safeName, safePrice, safeSku, safeStock, safeCategory, imageUrlsJson, safeDescription, colorsJson, tagsJson], (err, result) => {
             if (err) {
                 console.error('SQL Error during product creation:', err);
@@ -86,37 +102,54 @@ module.exports = (app, db) => {
         });
     });
 
-    // ROTA 3: Listar Produtos (GET /api/admin/produtos) - CORRIGIDA
+    // ROTA 3: Listar Produtos (GET /api/admin/produtos) - CORRIGIDA e PROTEGIDA
     app.get('/api/admin/produtos', checkAdmin, (req, res) => {
-        // Seleciona todos os campos, incluindo colors e tags
+        // Seleciona todos os campos
         db.query("SELECT id, name, price, sku, stock, category, image_urls, colors, tags FROM products ORDER BY id DESC", (err, result) => {
             if (err) {
-                 // Este erro 500 será retornado se as colunas colors ou tags não existirem.
                  console.error('SQL Error on GET /api/admin/produtos:', err);
-                 return res.status(500).json({ message: "Erro ao listar produtos. Verifique se as colunas 'colors' e 'tags' existem na tabela 'products'." });
+                 return res.status(500).json({ message: "Erro ao listar produtos. Verifique se as colunas 'colors' e 'tags' foram adicionadas ao banco de dados." }); 
             }
             
-            // Deserializa strings JSON para arrays antes de enviar ao front
+            // DESERIALIZAÇÃO CORRIGIDA usando safeJSONParse (resolve o erro 'rescue')
             const products = result.map(p => ({
                 ...p,
-                // Uso de try/catch para parse robusto, caso o JSON no banco esteja malformado
-                image_urls: p.image_urls ? (JSON.parse(p.image_urls) rescue []) : [],
-                colors: p.colors ? (JSON.parse(p.colors) rescue []) : [], 
-                tags: p.tags ? (JSON.parse(p.tags) rescue []) : []       
+                image_urls: safeJSONParse(p.image_urls),
+                colors: safeJSONParse(p.colors), 
+                tags: safeJSONParse(p.tags)       
             }));
             res.json(products);
         });
     });
     
-    // ROTA 4: Deletar Produto
+    // ROTA 4: Obter Detalhes do Produto (GET /api/produto/:id) - CORRIGIDA (Visualização Pública)
+    app.get('/api/produto/:id', (req, res) => {
+        const { id } = req.params;
+        // Inclui 'colors' e 'tags'
+        db.query("SELECT id, name, description, price, sku, stock, category, image_urls, colors, tags FROM products WHERE id = ?", [id], (err, result) => {
+            if (err) return res.status(500).send(err);
+            if (result.length === 0) return res.status(404).json({ message: "Produto não encontrado" });
+            
+            const product = result[0];
+            
+            // DESERIALIZAÇÃO CORRIGIDA usando safeJSONParse
+            product.image_urls = safeJSONParse(product.image_urls);
+            product.colors = safeJSONParse(product.colors);
+            product.tags = safeJSONParse(product.tags);
+            
+            res.json(product);
+        });
+    });
+
+    // ROTA 5: Deletar Produto (DELETE /api/admin/produtos/:id) - PROTEGIDA
     app.delete('/api/admin/produtos/:id', checkAdmin, (req, res) => {
         db.query("DELETE FROM products WHERE id = ?", [req.params.id], (err) => {
             if (err) return res.status(500).send(err);
             res.json({ message: "Produto deletado com sucesso" });
         });
     });
-    
-    // ROTA 5: Atualizar Produto (PUT /api/admin/produtos/:id)
+
+    // ROTA 6: Atualizar Produto (PUT /api/admin/produtos/:id) - Adicionada e PROTEGIDA
     app.put('/api/admin/produtos/:id', checkAdmin, (req, res) => {
         const { id } = req.params;
         const { name, price, sku, stock, category, image_urls, description, colors, tags } = req.body;
@@ -133,6 +166,7 @@ module.exports = (app, db) => {
         const colorsJson = JSON.stringify(colors || []);       
         const tagsJson = JSON.stringify(tags || []);           
 
+        // SQL CORRIGIDA para incluir colors e tags
         const sql = "UPDATE products SET name = ?, price = ?, sku = ?, stock = ?, category = ?, image_urls = ?, description = ?, colors = ?, tags = ? WHERE id = ?";
         db.query(sql, [safeName, safePrice, safeSku, safeStock, safeCategory, imageUrlsJson, safeDescription, colorsJson, tagsJson, id], (err, result) => {
             if (err) {
